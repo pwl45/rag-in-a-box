@@ -19,6 +19,9 @@ document_paths = [
 ```
 
 once you have some documents, do:
+
 `docker compose up`
+
 `docker exec -it eastwood /bin/bash`
+
 `uvicorn chatbot_interface_fastapi:app --port 7860 --host 0.0.0.0`
