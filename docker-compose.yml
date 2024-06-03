@@ -1,0 +1,29 @@
+version: '3.9'
+services:
+  eastwood:
+    build:
+      context: .
+    container_name: eastwood
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    networks:
+      - elastic
+    depends_on:
+      - chromadb
+    ports:
+      - "7860:7860"
+      - "8080:8080"
+
+  chromadb:
+    image: chromadb/chroma
+    container_name: chromadb
+    environment:
+      - discovery.type=single-node
+    networks:
+      - elastic
+    ports:
+      - "8000:8000"
+
+networks:
+  elastic:
+    driver: bridge
