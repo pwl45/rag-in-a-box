@@ -37,7 +37,6 @@ from langchain.memory import ConversationBufferMemory
 import tiktoken
 
 summary_model = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-1106")
-REDO_VECTORSTORE = False
 
 def num_tokens_str(s,model='gpt-3.5-turbo'):
     enc = tiktoken.encoding_for_model(model)
@@ -168,12 +167,10 @@ else:
     print('removing duplicates...')
     chunks_df = chunks_df.drop_duplicates(subset=['path','text'])
     print('done.')
-    print('no summary chunks:')
+    print('chunks to summarize: ')
     print(chunks_df)
     print('Continue?')
     input()
-    # since we're adding new chunks, redo the vectorstore
-    REDO_VECTORSTORE = True
     text_summarize_prompt_text = """You are an assistant tasked with summarizing text. \ 
     You will be given a chunk of a file with metadata about the file on the first line of the text \
     Please summarize the text
