@@ -1,42 +1,45 @@
+# Local Imports
+from extract_json import extract_json_codeblock
+from extract_message_and_json import extract_message_and_json 
+
+# Standard Library Imports
+import os
+import glob
+import uuid
+import pickle
+
+# Third Party Imports
 from unstructured.partition.pdf import partition_pdf
 from unstructured.partition.html import partition_html
 from unstructured.partition.text import partition_text
-from pydantic import BaseModel
-from typing import Any
-import os
-import glob
 import pandas as pd
-
-from langchain_openai import OpenAI
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.callbacks import get_openai_callback
-from langchain.retrievers import MultiVectorRetriever
-from langchain.storage import InMemoryStore
 # from langchain_community.vectorstores.elasticsearch import ElasticsearchStore
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import (
-  RunnableLambda,
   RunnablePassthrough
 )
 from langchain_core.documents import Document
-from langchain.output_parsers import JsonOutputToolsParser
-
-import uuid
-import json
-from typing import Union
-from operator import itemgetter
-import pickle
-from itertools import chain
 from langchain_community.vectorstores import Chroma
-from extract_json import extract_json_codeblock
-from extract_message_and_json import extract_message_and_json 
-
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
 import tiktoken
 
 summary_model = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-1106")
+embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+rag_model = ChatOpenAI(temperature=0, model="gpt-4-turbo")
+
+vectorstore = Chroma(
+    collection_name="roiv_documents_v5",
+    embedding_function=embeddings,
+    persist_directory="/eastwood/db/documents"
+)
+
+files_vectorstore = Chroma(
+    collection_name="roiv_files_v5",
+    embedding_function=embeddings,
+    persist_directory="/eastwood/db/files"
+)
 
 def num_tokens_str(s,model='gpt-3.5-turbo'):
     enc = tiktoken.encoding_for_model(model)
@@ -133,32 +136,30 @@ if os.path.exists('chunks.csv'):
 else:
     old_chunks_df = pd.DataFrame()
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-vectorstore = Chroma(
-    collection_name="roiv_documents_v5",
-    embedding_function=embeddings,
-    persist_directory="/eastwood/db/documents"
-)
+
+def doc_data_from_path(path,i=None,num_paths=None):
+    if i is not None and num_paths is not None:
+        print(f'chunking {i+1}/{num_paths}...')
+    filename = os.path.basename(path)
+    company = os.path.dirname(path).split('/')[-1]
+    document_type = os.path.dirname(path).split('/')[-2]
+    document_chunks = get_chunks(smart_partition_file(path))
+    document = {
+        'document_type': document_type,
+        'filename': filename,
+        'company': company,
+        'path': path,
+        'chunks': document_chunks
+    }
+    return document
+
 
 if len(document_paths) == 0: # no new chunks to read
     chunks_df = old_chunks_df
 else:
-    document_dicts = []
+    print(f'will chunk {document_paths}. Continue?')
     num_paths = len(document_paths)
-    for i,path in enumerate(document_paths):
-        print(f'chunking {i+1}/{num_paths}...')
-        filename = os.path.basename(path)
-        company = os.path.dirname(path).split('/')[-1]
-        document_type = os.path.dirname(path).split('/')[-2]
-        document_chunks = get_chunks(smart_partition_file(path))
-        document = {
-            'document_type': document_type,
-            'filename': filename,
-            'company': company,
-            'path': path,
-            'chunks': document_chunks
-        }
-        document_dicts.append(document)
+    document_dicts = [doc_data_from_path(path, i=i, num_paths=num_paths) for i, path in enumerate(document_paths)]
 
     print('done chunking.')
     print('creating chunks dataframe...')
@@ -245,12 +246,6 @@ else:
     print('done.')
 distinct_files_docs = summary_docs_from_distinct_files(distinct_files)
 
-files_vectorstore = Chroma(
-    collection_name="roiv_files_v5",
-    embedding_function=embeddings,
-    persist_directory="/eastwood/db/files"
-)
-
 top_files = files_vectorstore.similarity_search_with_relevance_scores("neptune", k=10)
 print('show me... NEPTUNE!')
 print(top_files[0])
@@ -316,10 +311,7 @@ Question: {question}
 
 rag_prompt = ChatPromptTemplate.from_template(rag_prompt_text)
 
-rag_model = ChatOpenAI(temperature=0, model="gpt-4-turbo")
-
 # rag_model = ChatOpenAI(temperature=0, model="gpt-4-turbo")
-memory = ConversationBufferMemory()
 rag_chain = (
   {"question": RunnablePassthrough(), "context": context_chain}
   | rag_prompt
@@ -400,8 +392,6 @@ def answer_question(question,history=[]):
     appendix = '\n\nUsed files:\n' + '\n'.join(used_chunk_links)
     result += appendix
     return result
-
-
 
 example_history = [
   ['Where is Washington DC?',"I don't know"],
