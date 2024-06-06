@@ -126,9 +126,12 @@ document_paths = [
     for path in glob.glob(f'./output/{category}/*/*.{extension}')
 ]
 
-old_chunks_df = pd.read_csv('chunks.csv')
-# get the document paths that are not in the old_chunks_df
-document_paths = [path for path in document_paths if path not in old_chunks_df['path'].tolist()]
+if os.path.exists('chunks.csv'):
+    old_chunks_df = pd.read_csv('chunks.csv')
+    # get the document paths that are not in the old_chunks_df
+    document_paths = [path for path in document_paths if path not in old_chunks_df['path'].tolist()]
+else:
+    old_chunks_df = pd.DataFrame()
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 vectorstore = Chroma(
@@ -137,7 +140,7 @@ vectorstore = Chroma(
     persist_directory="/eastwood/db/documents"
 )
 
-if len(document_paths) == 0:
+if len(document_paths) == 0: # no new chunks to read
     chunks_df = old_chunks_df
 else:
     document_dicts = []
