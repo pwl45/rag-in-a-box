@@ -258,60 +258,6 @@ print(top_files[0])
 # top_chunks = vectorstore.similarity_search("What was Roivant's gross-to-net on VTAMA?",k=5)
 
 # TODO chain to get filter 
-get_filters_prompt_text = '''
-Your task is to create a ChromaDB filter based on the user's question to retrieve relevant documents. Make sure to include any document categories that could be useful to the user's question.
-### Instructions for Creating Filters in ChromaDB
-
-1. **Understand the Metadata Fields**:
-   - **`company`**: This field represents the company name. Assume you have a list of standardized company names that a document can be associated with.
-   - **`document_type`**: This field categorizes the document into one of the following types: 'press-release', 'quarterly-filing', or 'annual-filing'. Don't filter on this field unless you are certain that the question can only be answered using a specific document type (or types).
-   - **`date`**: This field indicates the date the document was filed. The date format is typically ISO 8601 (YYYY-MM-DD). The current date is 2024-05-20
-
-2. **Determining Filter Requirements**:
-   - Before creating a filter, determine which metadata fields are relevant based on the user's query. For example, if a user asks about recent filings for a specific company, both the 'company' and 'date' fields become relevant.
-
-3. **Creating Basic Filters**:
-   - Create a basic filter by specifying a field and a condition. For JSON, the syntax generally resembles:
-     ```json
-     {{"field_name": {{"condition": "value"}}}}
-     ```
-   - Examples:
-     - To filter documents from "Acme Corp", use: `{{"company": "Acme Corp"}}`
-     - To filter documents of type 'annual-filing', use: `{{"document_type": "annual-filing"}}`
-     - To filter documents filed before January 1, 2023, use: `{{"date": {{"$lt": "2023-01-01"}}}}`
-
-4. **Combining Filters with Logical Operators**:
-   - **AND**: Use this to combine multiple conditions where all conditions must be true. In JSON:
-     ```json
-     {{"$and": [{{"condition1": "value1"}}, {{"condition2": "value2"}}]}}
-     ```
-   - **OR**: Use this when any of the conditions can be true. In JSON:
-     ```json
-     {{"$or": [{{"condition1": "value1"}}, {{"condition2": "value2"}}]}}
-     ```
-   - Examples:
-     - To find 'annual-filing' or 'quarterly-filing' documents for "Acme Corp", use:
-       ```json
-       {{"$and": [{{"company": "Acme Corp"}}, {{"$or": [{{"document_type": "annual-filing"}}, {{"document_type": "quarterly-filing"}}]}}]}}
-       ```
-     - To find documents filed in 2022 for either "Acme Corp" or "Beta Inc", use:
-       ```json
-       {{"$and": [{{"date": {{"$gte": "2022-01-01", "$lte": "2022-12-31"}}}}, {{"$or": [{{"company": "Acme Corp"}}, {{"company": "Beta Inc"}}]}}]}}
-       ```
-
-5. **Return Valid JSON**:
-   - Always ensure the output is valid JSON. If no filters are required based on the user's query, return an empty object (`{{}}`).
-
-6. **Testing and Validation**:
-   - Once a filter is created, test it against the database to ensure it retrieves the correct documents. Adjust as necessary based on the results and feedback.
-
-### User Query {user_question}
-'''
-get_filters_prompt = ChatPromptTemplate.from_template(get_filters_prompt_text)
-get_filters_chain = {"user_question": RunnablePassthrough()} | get_filters_prompt | summary_model | StrOutputParser()
-result = get_filters_chain.invoke("What has been the approval history of TIVDAK?")
-filters = extract_json_codeblock(result)
-print(filters)
 
 log={}
 def get_context_from_question(user_question,k=30):
