@@ -127,43 +127,49 @@ document_paths = [
     for path in glob.glob(f'./output/{category}/*/*.{extension}')
 ]
 
-document_dicts = []
-num_paths = len(document_paths)
-for i,path in enumerate(document_paths):
-    print(f'chunking {i+1}/{num_paths}...')
-    filename = os.path.basename(path)
-    company = os.path.dirname(path).split('/')[-1]
-    document_type = os.path.dirname(path).split('/')[-2]
-    document_chunks = get_chunks(smart_partition_file(path))
-    document = {
-        'document_type': document_type,
-        'filename': filename,
-        'company': company,
-        'path': path,
-        'chunks': document_chunks
-    }
-    document_dicts.append(document)
+old_chunks_df = pd.read_csv('chunks.csv')
+# get the document paths that are not in the old_chunks_df
+document_paths = [path for path in document_paths if path not in old_chunks_df['path'].tolist()]
 
-print('done chunking.')
-print('creating chunks dataframe...')
-chunks_df = pd.DataFrame(document_dicts)
-chunks_df = chunks_df.explode('chunks').reset_index()
-chunks_df = chunks_df.join(chunks_df['chunks'].apply(pd.Series)).drop(['chunks','index'],axis=1)
-print('done.')
+embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+vectorstore = Chroma(
+    collection_name="roiv_documents_v5",
+    embedding_function=embeddings,
+    persist_directory="/eastwood/db/documents"
+)
 
-print('removing duplicates...')
-chunks_df = chunks_df.drop_duplicates(subset=['path','text'])
-print('done.')
+if len(document_paths) == 0:
+    chunks_df = old_chunks_df
+else:
+    document_dicts = []
+    num_paths = len(document_paths)
+    for i,path in enumerate(document_paths):
+        print(f'chunking {i+1}/{num_paths}...')
+        filename = os.path.basename(path)
+        company = os.path.dirname(path).split('/')[-1]
+        document_type = os.path.dirname(path).split('/')[-2]
+        document_chunks = get_chunks(smart_partition_file(path))
+        document = {
+            'document_type': document_type,
+            'filename': filename,
+            'company': company,
+            'path': path,
+            'chunks': document_chunks
+        }
+        document_dicts.append(document)
 
-print('getting cached summmaries...')
-old_chunks_df = pd.read_csv('chunks.csv').drop_duplicates(subset=['path','text'])
-chunks_df = chunks_df.merge(old_chunks_df[['path','text','summary','id']],how='left',on=['path','text'])
-print('done.')
-no_summary_chunks = chunks_df[chunks_df['summary'].isna()].copy().reset_index(drop=True)
+    print('done chunking.')
+    print('creating chunks dataframe...')
+    chunks_df = pd.DataFrame(document_dicts)
+    chunks_df = chunks_df.explode('chunks').reset_index()
+    chunks_df = chunks_df.join(chunks_df['chunks'].apply(pd.Series)).drop(['chunks','index'],axis=1)
+    print('done.')
 
-if no_summary_chunks.shape[0] > 0:
+    print('removing duplicates...')
+    chunks_df = chunks_df.drop_duplicates(subset=['path','text'])
+    print('done.')
     print('no summary chunks:')
-    print(no_summary_chunks)
+    print(chunks_df)
     print('Continue?')
     input()
     # since we're adding new chunks, redo the vectorstore
@@ -174,16 +180,21 @@ if no_summary_chunks.shape[0] > 0:
     Text chunk: {element} """
     text_summarize_prompt = ChatPromptTemplate.from_template(text_summarize_prompt_text)
     text_summarize_chain = {"element": RunnablePassthrough()} | text_summarize_prompt | summary_model | StrOutputParser()
-    summarize_target = list('From ' + no_summary_chunks['company']+ "'s" + ' ' + no_summary_chunks['document_type'] + ': ' + no_summary_chunks['filename'] + '\n' + no_summary_chunks['text'])
+    summarize_target = list('From ' + chunks_df['company']+ "'s" + ' ' + chunks_df['document_type'] + ': ' + chunks_df['filename'] + '\n' + chunks_df['text'])
     print('summarizing chunks...')
     summarize_output = text_summarize_chain.batch(summarize_target, {"max_concurrency": 20})
     print('done.')
-    no_summary_chunks = no_summary_chunks.drop('summary',axis=1)
-    no_summary_chunks['summary'] = pd.Series(summarize_output)
+    # chunks_df = chunks_df.drop('summary',axis=1)
+    chunks_df['summary'] = pd.Series(summarize_output)
     # set the id column using uuid4
-    no_summary_chunks['id'] = [str(uuid.uuid4()) for _ in no_summary_chunks['summary']]
-    prev_shape = chunks_df.shape[0]
-    chunks_df = pd.concat([chunks_df[~chunks_df['summary'].isna()],no_summary_chunks],ignore_index=True)
+    chunks_df['id'] = [str(uuid.uuid4()) for _ in chunks_df['summary']]
+
+    new_documents = summary_docs_from_chunks(chunks_df)
+    print('adding new documents to vector store...')
+    vectorstore.add_documents(new_documents)
+    print('done.')
+    prev_shape = chunks_df.shape[0] + old_chunks_df.shape[0]
+    chunks_df = pd.concat([chunks_df,old_chunks_df],ignore_index=True)
     new_shape = chunks_df.shape[0]
     if prev_shape != new_shape:
         print('Something went wrong in merging the new summaries')
@@ -205,106 +216,9 @@ total_cost = 15.58 + 2.22
 chunks_grouped['cost'] = total_cost * chunks_grouped['text_pct']
 chunks_grouped['cost_per_document'] = chunks_grouped['cost'] / chunks_grouped['distinct_paths']
 
-# fill in missing summaries 
 
-# if not os.path.exists('./chunks.csv'):
-#     html_paths = glob.glob('./output/press-release/*/*.txt') + glob.glob('./output/annual-financial-report/*/*.html') + glob.glob('./output/quarterly-financial-report/*/*.html') + glob.glob('./output/earnings-call/*/*.pdf')
-#     # html_paths = glob.glob('./output/press-release/*/*.txt')[-5:] + glob.glob('./output/annual-financial-report/*/*.html')[-5:] + glob.glob('./output/quarterly-financial-report/*/*.html')[-5:]
-#     html_files = []
-#     for path in html_paths:
-#         # Extract the basename of the file
-#         filename = os.path.basename(path)
-#         # Extract the company name from the path (assuming directory structure is consistent)
-#         company = os.path.dirname(path).split('/')[-1]
-#         document_type = os.path.dirname(path).split('/')[-2]
-#         # Create a dictionary for the current file
-#         document = {
-#             'document_type': document_type,
-#             'filename': filename,
-#             'company': company,
-#             'path': path
-#         }
-#         html_files.append(document)
-
-#     # raw_htmls_elements = []
-#     for html_file in html_files:
-#       html_path = html_file['path']
-#       # Create the expected pickle file path
-#       pickle_path = f'{html_path}.pkl'
-#       # Check if the pickle file exists
-#       if os.path.exists(pickle_path):
-#         print(f'Loading from cache: {pickle_path}')
-#         # Load data from the existing pickle file
-#         with open(pickle_path, 'rb') as f:
-#           # raw_htmls_elements.append(pickle.load(f))
-#           raw_data = pickle.load(f)
-#           # html_file['raw_data'] = pickle.load(f)
-#       else:
-#         print(f'Processing and saving to cache: {html_path}')
-#         # Partition the html since the cache does not exist
-#         if html_path.endswith('.html'):
-#           raw_data = partition_html(
-#             filename=html_path,
-#             chunking_strategy="by_title",
-#             max_characters=1800,
-#             new_after_n_chars=1500,
-#             token='Klveo0E7dzCQEJUcFUzpeI5FNiqKpL',
-#           )
-#         else:
-#           raw_data = partition_text(filename=html_path)
-#         # Append the processed data to the list
-#         # raw_htmls_elements.append(raw_data)
-#         with open(pickle_path, 'wb') as f:
-#           pickle.dump(raw_data, f)
-#       chunks = []
-#       for text_chunk in raw_data:
-#         if "unstructured.documents.elements.Table" in str(text_chunk.__class__):
-#           type = 'table'
-#           text = str(text_chunk.metadata.text_as_html)
-#         else:
-#           print('using text')
-#           type = 'text'
-#           text = str(text_chunk)
-#         chunks.append({
-#           'type': type,
-#           'text': text,
-#           'metadata': text_chunk.metadata,
-#           'raw_data': text_chunk
-#         })
-#       html_file['chunks'] = chunks
-
-#     chunks_df = pd.DataFrame(html_files)
-#     chunks_df = chunks_df.explode('chunks').reset_index()
-#     chunks_df = chunks_df.join(chunks_df['chunks'].apply(pd.Series)).drop(['chunks','index'],axis=1)
-
-#     text_summarize_prompt_text = """You are an assistant tasked with summarizing text. \ 
-#     You will be given a chunk of a file with metadata about the file on the first line of the text \
-#     Please summarize the text
-#     Text chunk: {element} """
-#     text_summarize_prompt = ChatPromptTemplate.from_template(text_summarize_prompt_text)
-#     text_summarize_chain = {"element": RunnablePassthrough()} | text_summarize_prompt | summary_model | StrOutputParser()
-
-#     summarize_target = list('From ' + chunks_df['company']+ "'s" + ' ' + chunks_df['document_type'] + ': ' + chunks_df['filename'] + '\n' + chunks_df['text'])
-#     print('summarizing chunks...')
-#     summarize_output = text_summarize_chain.batch(summarize_target, {"max_concurrency": 10})
-#     print('done.')
-
-#     chunks_df['summary'] = pd.Series(summarize_output)
-
-#     # todo: better ID system    
-#     chunks_df['id'] = [str(uuid.uuid4()) for _ in chunks_df['summary']]
-#     chunks_df.to_csv('chunks.csv',index=False)
-# else:
-#     chunks_df = pd.read_csv('chunks.csv')
-#     # replace nan with empty string in summary and text columns
-#     chunks_df['summary'] = chunks_df['summary'].fillna('')
-#     chunks_df['text'] = chunks_df['text'].fillna('')
-
-embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
 documents = summary_docs_from_chunks(chunks_df)
-
-# remove
 
 print(f'creating vector store...')
 
@@ -331,38 +245,11 @@ else:
     print('done.')
 distinct_files_docs = summary_docs_from_distinct_files(distinct_files)
 
-vectorstore = Chroma(
-    collection_name="roiv_documents_v5",
-    embedding_function=embeddings,
-    persist_directory="/eastwood/db/documents"
-)
-
 files_vectorstore = Chroma(
     collection_name="roiv_files_v5",
     embedding_function=embeddings,
     persist_directory="/eastwood/db/files"
 )
-
-if REDO_VECTORSTORE:
-    # drop files_vectorstore
-    print('deleting old vectorstores...')
-    files_vectorstore.delete_collection()
-    vectorstore.delete_collection()
-    vectorstore = Chroma(
-        collection_name="roiv_documents_v5",
-        embedding_function=embeddings,
-        persist_directory="/eastwood/db/documents"
-    )
-    files_vectorstore = Chroma(
-        collection_name="roiv_files_v5",
-        embedding_function=embeddings,
-        persist_directory="/eastwood/db/files"
-    )
-    print('adding files to vectorstore...')
-    files_vectorstore.add_documents(distinct_files_docs)
-    print('adding documents to vector store...')
-    vectorstore.add_documents(documents)
-    print('done.')
 
 top_files = files_vectorstore.similarity_search_with_relevance_scores("neptune", k=10)
 print('show me... NEPTUNE!')
@@ -512,7 +399,6 @@ def do_rag(user_question):
     with get_openai_callback() as cb:
         result= question_answer_chain.invoke([user_question,context_str])
         print(cb)
-
     try:
         message,chunks_json = extract_message_and_json(result)
         # print(f'used chunks: {chunks_json}')

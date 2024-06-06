@@ -1,7 +1,6 @@
 NEXT ON TODO: 
 auto scrape a few 10-K and 10-Q documents for the user
 
-
 see line 117 for where it reads documents:
 ```python3
 categories = [
