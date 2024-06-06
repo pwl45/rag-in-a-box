@@ -1,25 +1,19 @@
 # Local Imports
 from extract_message_and_json import extract_message_and_json 
+from chunk_tools import get_chunk_documents_from_path
 
 # Standard Library Imports
 import os
 import glob
 import uuid
-import pickle
 
 # Third Party Imports
-from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.html import partition_html
-from unstructured.partition.text import partition_text
 import pandas as pd
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.callbacks import get_openai_callback
-# from langchain_community.vectorstores.elasticsearch import ElasticsearchStore
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import (
-  RunnablePassthrough
-)
+from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from langchain_community.vectorstores import Chroma
 import tiktoken
@@ -59,61 +53,12 @@ def summary_docs_from_distinct_files(distinct_files):
         documents.append(Document(page_content=doc_repr, metadata=metadata))
     return documents
 
-
 def docs_from_chunks(chunk_df):
     documents = []
     for i, row in chunk_df.iterrows():
         metadata = row[['document_type','filename','company','id']].to_dict()
         documents.append(Document(page_content=row['text'], metadata=metadata))
     return documents
-
-
-def smart_partition_file(filename):
-    pickle_path = f'{filename}.pkl'
-    raw_data = ''
-    if os.path.exists(pickle_path):
-        print(f'Loading {filename} from cache: {pickle_path}')
-        # Load data from the existing pickle file
-        with open(pickle_path, 'rb') as f:
-            # raw_htmls_elements.append(pickle.load(f))
-            raw_data =  pickle.load(f)
-    elif filename.endswith('.html'):
-        print(f'partitioning html: {filename}...')
-        raw_data =  partition_html(filename)
-    elif filename.endswith('.pdf'):
-        print(f'partitioning pdf: {filename}...')
-        raw_data =  partition_pdf(filename=filename,
-                                  extract_images_in_pdf=False,
-                                  infer_table_structure=True,
-                                  chunking_strategy="by_title",
-                                  max_characters=1800,
-                                  new_after_n_chars=1500,
-                                  combine_text_under_n_chars=1000,
-                                  )
-    elif filename.endswith('.txt'):
-        print(f'partitioning text: {filename}...')
-        raw_data =  partition_text(filename)
-    with open(pickle_path, 'wb') as f:
-        pickle.dump(raw_data, f)
-    return raw_data
-
-def get_chunks(raw_data):
-    chunks = []
-    for text_chunk in raw_data:
-        if "unstructured.documents.elements.Table" in str(text_chunk.__class__):
-            type = 'table'
-            text = str(text_chunk.metadata.text_as_html)
-        else:
-            # print('using text')
-            type = 'text'
-            text = str(text_chunk)
-        chunks.append({
-            'type': type,
-            'text': text,
-            'metadata': text_chunk.metadata,
-            'raw_data': text_chunk
-        })
-    return chunks
 
 categories = [
     ('press-release', 'txt'),
@@ -135,30 +80,12 @@ if os.path.exists('chunks.csv'):
 else:
     old_chunks_df = pd.DataFrame()
 
-
-def doc_data_from_path(path,i=None,num_paths=None):
-    if i is not None and num_paths is not None:
-        print(f'chunking {i+1}/{num_paths}...')
-    filename = os.path.basename(path)
-    company = os.path.dirname(path).split('/')[-1]
-    document_type = os.path.dirname(path).split('/')[-2]
-    document_chunks = get_chunks(smart_partition_file(path))
-    document = {
-        'document_type': document_type,
-        'filename': filename,
-        'company': company,
-        'path': path,
-        'chunks': document_chunks
-    }
-    return document
-
-
 if len(document_paths) == 0: # no new chunks to read
     chunks_df = old_chunks_df
 else:
     print(f'will chunk {document_paths}. Continue?')
     num_paths = len(document_paths)
-    document_dicts = [doc_data_from_path(path, i=i, num_paths=num_paths) for i, path in enumerate(document_paths)]
+    document_dicts = [get_chunk_documents_from_path(path, i=i, num_paths=num_paths) for i, path in enumerate(document_paths)]
 
     print('done chunking.')
     print('creating chunks dataframe...')
@@ -212,15 +139,10 @@ chunks_grouped = chunks_overview.groupby('document_type').agg(
     row_count=pd.NamedAgg(column='text_len', aggfunc='count')  # You can use any column for counting rows
 ).reset_index()
 chunks_grouped['text_pct'] = chunks_grouped['total_text_len'] / chunks_grouped['total_text_len'].sum()
+# TODO: more robust cost caluclations
 total_cost = 15.58 + 2.22
 chunks_grouped['cost'] = total_cost * chunks_grouped['text_pct']
 chunks_grouped['cost_per_document'] = chunks_grouped['cost'] / chunks_grouped['distinct_paths']
-
-
-
-documents = summary_docs_from_chunks(chunks_df)
-
-print(f'creating vector store...')
 
 distinct_files = chunks_df[['document_type','filename','company','path']].drop_duplicates().reset_index().drop('index',axis=1)
 # load the length of the file content at `path` 
@@ -245,22 +167,10 @@ else:
     print('done.')
 distinct_files_docs = summary_docs_from_distinct_files(distinct_files)
 
-top_files = files_vectorstore.similarity_search_with_relevance_scores("neptune", k=10)
-print('show me... NEPTUNE!')
-print(top_files[0])
-# summary_docs = vectorstore.similarity_search("What is Pfizer's partnership with 23 and me?", k=15)
-# top_chunks = vectorstore.similarity_search("What was Roivant's gross-to-net on VTAMA?",k=5)
-
-# TODO chain to get filter 
 
 log={}
 def get_context_from_question(user_question,k=30):
-    top_files = files_vectorstore.similarity_search(user_question, k=3)
-    global_top_files = top_files
-    print('top files:',top_files)
-    # filter = {"$and": [{"company": "roivant"}, {"$or": [{"document_type": "annual-finaneial-report"}, {"document_type": "quarterly-financial-report"}]}]}
     print('searching vector db...')
-    log['top_files'] = top_files
     top_k = vectorstore.similarity_search(user_question, k=k)
     log['top_k'] = top_k
     print('done.')
@@ -277,21 +187,13 @@ def parse_context_from_docs(docs):
         out_str += '--------------------------------------------------\n'
     return out_str
 
-# user_question = "What is Pfizer's collaboration with 23 and me?"
-# context_summary_docs = get_context_from_question(user_question)
-
 def map_summaries_to_docs(context_summary_docs):
     context_ids = [{'id': doc.metadata['id']} for doc in context_summary_docs]
     context_chunks_df = pd.DataFrame(context_ids).merge(chunks_df,on='id')
     context_docs = docs_from_chunks(context_chunks_df)
     return context_docs
 
-# context_ids = [{'id': doc.metadata['id']} for doc in context_summary_docs]
-# context_chunks_df = pd.DataFrame(context_ids).merge(chunks_df,on='id')
-# context_docs = docs_from_chunks(context_chunks_df)
 context_chain = RunnablePassthrough() | get_context_from_question | map_summaries_to_docs | parse_context_from_docs
-
-# context_chain.invoke(user_question)
 
 rag_prompt_text = """You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question in as many words as required.
 Numbers in tables from financial filings should be assumed to be in thousands unless specified otherwise in the table. 
@@ -310,19 +212,9 @@ Question: {question}
 
 rag_prompt = ChatPromptTemplate.from_template(rag_prompt_text)
 
-# rag_model = ChatOpenAI(temperature=0, model="gpt-4-turbo")
-rag_chain = (
-  {"question": RunnablePassthrough(), "context": context_chain}
-  | rag_prompt
-  # | conversation
-  | rag_model
-  | StrOutputParser()
-)
-
 question_answer_chain = (
   {"question": RunnablePassthrough(), "context": RunnablePassthrough()}
   | rag_prompt
-  # | conversation
   | rag_model
   | StrOutputParser()
 )
@@ -336,16 +228,13 @@ def do_rag(user_question):
     with get_openai_callback() as cb:
         result= question_answer_chain.invoke([user_question,context_str])
         print(cb)
+    chunks_json = {'chunk_indices': []}
+    message = result
     try:
         message,chunks_json = extract_message_and_json(result)
-        # print(f'used chunks: {chunks_json}')
-        # for chunk_index in chunks_json['chunk_indices']:
-        #     print(log['top_k'][chunk_index])
     except Exception as e:
         print(f'error parsing chunk json')
-        chunks_json = {'chunk_indices': []}
-        message = result
-        pass
+
     try:
         chunk_indices = chunks_json['chunk_indices']
         used_chunks = [context_docs[i] for i in chunk_indices]
