@@ -95,7 +95,7 @@ else:
     print('done.')
 
     print('removing duplicates...')
-    chunks_df = chunks_df.drop_duplicates(subset=['path','text'])
+    chunks_df = chunks_df.drop_duplicates(subset=['path','text']).reset_index().drop('index',axis=1)
     print('done.')
     print('chunks to summarize: ')
     print(chunks_df)
@@ -113,6 +113,12 @@ else:
     print('done.')
     # chunks_df = chunks_df.drop('summary',axis=1)
     chunks_df['summary'] = pd.Series(summarize_output)
+    # exit(1) if there are NA values in the summary column
+    if chunks_df['summary'].isna().sum() > 0:
+        print('Something went wrong in applying the summaries to the chunks. exiting.')
+        print(summarize_output)
+        print(chunks_df[chunks_df['summary'].isna()])
+        exit(1)
     # set the id column using uuid4
     chunks_df['id'] = [str(uuid.uuid4()) for _ in chunks_df['summary']]
 
