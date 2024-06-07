@@ -16,7 +16,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from langchain_community.vectorstores import Chroma
-import tiktoken
 
 summary_model = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-1106")
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
@@ -34,10 +33,6 @@ files_vectorstore = Chroma(
     embedding_function=embeddings,
     persist_directory="/eastwood/db/files"
 )
-
-def num_tokens_str(s,model='gpt-3.5-turbo'):
-    enc = tiktoken.encoding_for_model(model)
-    return len(enc.encode(s))
 
 def summary_docs_from_chunks(chunk_df):
     documents = []
@@ -203,7 +198,7 @@ def map_summaries_to_docs(context_summary_docs):
 
 rag_prompt_text = """You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question in as many words as required.
 Numbers in tables from financial filings should be assumed to be in thousands unless specified otherwise in the table. 
-The current date is 2024-06-03. 
+The current date is 2024-06-06. 
 If the user asks a question about a financial metric from "last year", make sure to use their latest annual filing (10-K) document to answer.
 If the user asks a question about a financial metric from "last quarter", make sure to use their latest quarterly filing (10-Q) document to answer.
 At the bottom of your answer, add a json block listing the chunk indices you used to answer the question. It should look like:
@@ -230,8 +225,6 @@ def do_rag(user_question):
     top_documents = get_context_from_question(user_question)
     context_docs = map_summaries_to_docs(top_documents)
     context_str = parse_context_from_docs(context_docs)
-    rag_prompt_str = rag_prompt.messages[0].prompt.template
-    print('Tokens used for rag: ', num_tokens_str(rag_prompt_str + context_str + user_question))
     with get_openai_callback() as cb: # used to get the number of tokens used
         result= question_answer_chain.invoke([user_question,context_str])
         print(cb)
@@ -293,4 +286,10 @@ example_history = [
   ['what is Roivant?', 'Roivant is a commercial-stage biopharmaceutical company focused on improving patient lives by accelerating the development and commercialization of important medicines. It operates by creating nimble subsidiaries, known as "Vants," to develop and commercialize its medicines and technologies. Roivant also incubates discovery-stage companies and health technology startups complementary to its biopharmaceutical business.']
 ]
 
-result = answer_question("What were the last reported sales for Pfizer's COVID vaccine?")
+if __name__ == '__main__':
+    user_question = "What were the last reported sales for Pfizer's COVID vaccine?"
+    print(f'answering question: {user_question}')
+    result = answer_question(user_question)
+    print(result)
+
+
