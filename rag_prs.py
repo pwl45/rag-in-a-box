@@ -22,6 +22,7 @@ summary_model = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-1106")
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 rag_model = ChatOpenAI(temperature=0, model="gpt-4-turbo")
 
+# TODO: put vectorstore in separate vectorstore python file
 vectorstore = Chroma(
     collection_name="roiv_documents_v5",
     embedding_function=embeddings,
@@ -199,7 +200,6 @@ def map_summaries_to_docs(context_summary_docs):
     context_docs = docs_from_chunks(context_chunks_df)
     return context_docs
 
-context_chain = RunnablePassthrough() | get_context_from_question | map_summaries_to_docs | parse_context_from_docs
 
 rag_prompt_text = """You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question in as many words as required.
 Numbers in tables from financial filings should be assumed to be in thousands unless specified otherwise in the table. 
@@ -226,12 +226,13 @@ question_answer_chain = (
 )
 
 def do_rag(user_question):
+    # context_chain = RunnablePassthrough() | get_context_from_question | map_summaries_to_docs | parse_context_from_docs
     top_documents = get_context_from_question(user_question)
     context_docs = map_summaries_to_docs(top_documents)
     context_str = parse_context_from_docs(context_docs)
     rag_prompt_str = rag_prompt.messages[0].prompt.template
     print('Tokens used for rag: ', num_tokens_str(rag_prompt_str + context_str + user_question))
-    with get_openai_callback() as cb:
+    with get_openai_callback() as cb: # used to get the number of tokens used
         result= question_answer_chain.invoke([user_question,context_str])
         print(cb)
     chunks_json = {'chunk_indices': []}
