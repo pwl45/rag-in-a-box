@@ -34,6 +34,9 @@ files_vectorstore = Chroma(
     persist_directory="/eastwood/db/files"
 )
 
+# Convert the chunk_df to a list of Document objects
+# Each Document object will have the page_content as the summary + text of the chunk
+# This helps with vectorization
 def summary_docs_from_chunks(chunk_df):
     documents = []
     for i, row in chunk_df.iterrows():
