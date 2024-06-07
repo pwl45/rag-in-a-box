@@ -1,5 +1,4 @@
-NEXT ON TODO: 
-auto scrape a few 10-K and 10-Q documents for the user
+The file edgarclient.py can be used to scrape financial reports
 
 see line 117 for where it reads documents:
 ```python3

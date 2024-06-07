@@ -129,19 +129,19 @@ for ticker in tickers:
             print(filename)
             sleep(1)
 
-file_name = None
-filing_content = None
-for ticker in tickers:
-    company_name = ticker_name_map[ticker]
-    for filing_type in ['10-K','10-Q']:
-        filing_type_name = filing_type_map[filing_type]
-        file_metadata, filing_content = client.get_recent_filing(ticker, filing_type)
-        filing_date = file_metadata.filingDate
-        filename = f'output/{filing_type_name}-financial-reports/{company_name}/{filing_type}-{filing_date}.html'
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        with open(filename, 'w') as f:
-            f.write(filing_content)
-        print(filing_content[:1000])
-        print(filename)
-        sleep(1)
-    # write filing to output /
+# file_name = None
+# filing_content = None
+# for ticker in tickers:
+#     company_name = ticker_name_map[ticker]
+#     for filing_type in ['10-K','10-Q']:
+#         filing_type_name = filing_type_map[filing_type]
+#         file_metadata, filing_content = client.get_recent_filing(ticker, filing_type)
+#         filing_date = file_metadata.filingDate
+#         filename = f'output/{filing_type_name}-financial-reports/{company_name}/{filing_type}-{filing_date}.html'
+#         os.makedirs(os.path.dirname(filename), exist_ok=True)
+#         with open(filename, 'w') as f:
+#             f.write(filing_content)
+#         print(filing_content[:1000])
+#         print(filename)
+#         sleep(1)
+#     # write filing to output /

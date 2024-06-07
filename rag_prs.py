@@ -108,6 +108,7 @@ else:
     text_summarize_chain = {"element": RunnablePassthrough()} | text_summarize_prompt | summary_model | StrOutputParser()
     summarize_target = list('From ' + chunks_df['company']+ "'s" + ' ' + chunks_df['document_type'] + ': ' + chunks_df['filename'] + '\n' + chunks_df['text'])
     print('summarizing chunks...')
+    # Get the summary of each chunk in parallel (20 at a time)
     summarize_output = text_summarize_chain.batch(summarize_target, {"max_concurrency": 20})
     print('done.')
     # chunks_df = chunks_df.drop('summary',axis=1)
