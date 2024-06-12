@@ -16,6 +16,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
 from langchain_community.vectorstores import Chroma
+from langchain.chains import LLMChain, SimpleSequentialChain
 
 summary_model = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-1106")
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
@@ -224,6 +225,101 @@ question_answer_chain = (
   | StrOutputParser()
 )
 
+extract_question_from_history_prompt_text = """You are an assistant tasked with distilling a user's question. You will be given a history of user questions and assistant responses in chronological order. Your task is to use the user's most recent question along with the conversation history to extract the user's question along with all relevant context into one message. For example, if the user asked "What is AI?" followed by "and how is it used?" , you would return the distilled message "How is AI used?" . If the user's question does not relate to the conversation history, just return the user's most recent question as-is (do not involve other questions)
+User Question: {question}
+Conversation History: {conversation_history}
+"""
+extract_question_from_history_prompt = ChatPromptTemplate.from_template(extract_question_from_history_prompt_text) 
+
+coerce_timeframes_prompt_text='''
+You are an assistant tasked with converting timeframes in a user's question to the appropriate document type. The current date is 2024-06-03. You will be given a user question that contains a timeframe such as "last year" or "last quarter". Replace any references to 'last year' with 'using the most recent annual report (10-K)', and replace any references to 'last quarter' with 'using the most recent quarterly report (10-Q).' 
+If no timeframe is present, leave the question as-is. DO NOT modify the user's question unless they reference a timeframe like 'last year' or 'last quarter' or something equivalent.
+User's question: {question}
+'''
+coerce_timeframes_prompt = ChatPromptTemplate.from_template(coerce_timeframes_prompt_text ) 
+
+separate_questions_prompt_text='''
+You are an information retrieval assistant tasked with extracting questions to query a vector database. You will be given a message from a user that may contain multiple related or unrelated questions. 
+Your task is to extract each question into a separate message, including any relevant context. Each question should be on its own line, i.e. your output should delimit the distinct questions with newlines. 
+As an example, if the user asks "What are the capitals of France and Germany?" you would return 
+"What is the capital of France?
+What is the capital of Germany?"
+If the user's message asks for an analysis of multiple things, return the questions that would be asked to get the data needed for the analysis. For example, if the user asked "Compare the populations of France and Germany" you would return 
+"What is the population of France?
+What is the population of Germany?"
+Here is the user's question: {question}
+'''
+separate_questions_prompt = ChatPromptTemplate.from_template(separate_questions_prompt_text ) 
+
+question_history_chain = (
+    {"question": RunnablePassthrough(), "conversation_history": RunnablePassthrough()}
+    | extract_question_from_history_prompt
+    | rag_model
+    | StrOutputParser()
+)
+
+question_extraction_chain = (
+    {"question": RunnablePassthrough(), "conversation_history": RunnablePassthrough()}
+    | coerce_timeframes_prompt
+    | rag_model
+    | separate_questions_prompt
+    | rag_model
+    | StrOutputParser()
+)
+
+coerce_timeframes_chain = (
+    {"question": RunnablePassthrough()}
+    | coerce_timeframes_prompt
+    | rag_model
+    | StrOutputParser()
+)
+
+separate_questions_chain = (
+    {"question": RunnablePassthrough()}
+    | separate_questions_prompt
+    | rag_model
+    | StrOutputParser()
+)
+
+example_history = [
+    ['what is Roivant?', 'Roivant is a commercial-stage biopharmaceutical company focused on improving patient lives by accelerating the development and commercialization of important medicines. It operates by creating nimble subsidiaries, known as "Vants," to develop and commercialize its medicines and technologies. Roivant also incubates discovery-stage companies and health technology startups complementary to its biopharmaceutical business.']
+]
+example_conversation_history = [{'user_message': user, 'assistant_response': assistant} for user, assistant in example_history]
+user_question = "Compare Roivant's SG&A expense as a percent of total operating expenses from last year with BridgeBio's"
+user_question = question_history_chain.invoke([user_question,str(example_conversation_history)])
+extracted_questions = question_extraction_chain.invoke([user_question,example_conversation_history])
+
+
+def do_rag_multiquestion(original_question,extracted_questions_list):
+    aggregated_context = ''
+    for question in extracted_questions_list:
+        print(f'question: {question}')
+        top_documents = get_context_from_question(question)
+        context_docs = map_summaries_to_docs(top_documents)
+        context_str = parse_context_from_docs(context_docs)
+        aggregated_context += context_str
+    with get_openai_callback() as cb: # used to get the number of tokens used
+        result= question_answer_chain.invoke([original_question,aggregated_context])
+        print(cb)
+    chunks_json = {'chunk_indices': []}
+    message = result
+    try:
+        message,chunks_json = extract_message_and_json(result)
+    except Exception as e:
+        print(f'error parsing chunk json')
+    try:
+        chunk_indices = chunks_json['chunk_indices']
+        used_chunks = [context_docs[i] for i in chunk_indices]
+    except Exception as e:
+        print(f'error extracting used chunks: {e}')
+        chunks_json = {'chunk_indices': []}
+        used_chunks = []
+    print(f'returning: {message},{used_chunks}')
+    return message, used_chunks
+
+result,used_chunks = do_rag_multiquestion(user_question,extracted_questions.split('\n'))
+print(result)
+
 def do_rag(user_question):
     # context_chain = RunnablePassthrough() | get_context_from_question | map_summaries_to_docs | parse_context_from_docs
     top_documents = get_context_from_question(user_question)
@@ -254,30 +350,18 @@ def do_rag(user_question):
 def answer_question(question,history=[]):
     print(f'answering question: {question}')
     print(f'history: {history}')
-    # map history, a list of user-message, assistant-message pairs, to a list of dictionaries
     if len(history) > 0:
+        # map history, a list of user-message, assistant-message pairs, to a list of dictionaries
         conversation_history = [{'user_message': user, 'assistant_response': assistant} for user, assistant in history]
-        extract_question_from_history_prompt_text = f"""You are an assistant tasked with distilling a user's question. You will be given a history of user questions and assistant responses in chronological order. Your task is to use the user's most recent question along with the conversation history to extract the user's question along with all relevant context into one message. For example, if the user asked "What is AI?" followed by "and how is it used?" , you would return the distilled message "How is AI used?" . If the user's question does not relate to the conversation history, just return the user's most recent question as-is (do not involve other questions)
-    User Question: {question}
-    Conversation History: {conversation_history}
-    """
-        question = rag_model.invoke(extract_question_from_history_prompt_text).content
+        question = question_history_chain.invoke([question,str(conversation_history)])
         print(f'extracted question: {question}')
-    coerce_timeframes_prompt_text=f'''
-    You are an assistant tasked with converting timeframes in a user's question to the appropriate document type. The current date is 2024-06-03. You will be given a user question that contains a timeframe such as "last year" or "last quarter". Replace any references to 'last year' with 'using the most recent annual report (10-K)', and replace any references to 'last quarter' with 'using the most recent quarterly report (10-Q).' 
-    If no timeframe is present, leave the question as-is. DO NOT modify the user's question unless they reference a timeframe like 'last year' or 'last quarter' or something equivalent.
-    User's question: {question}
-    '''
-    print(f'pre timeframes question: {question}')
-    question = rag_model.invoke(coerce_timeframes_prompt_text).content
-    print(f'post timeframes question: {question}')
+    questions = separate_questions_chain.invoke(question)
+    print(f'separated questions: {questions}')
+    # TODO coerce
     result, used_chunks = do_rag(question)
     chunk_ids = [chunk.metadata['id'] for chunk in used_chunks]
-    # get chunks from chunk_df using chunk_ids
     used_chunks_df = chunks_df[chunks_df['id'].isin(chunk_ids)]
     used_chunks_paths = used_chunks_df['path'].unique().tolist()
-    # convert relative paths in used_chunks_paths to absolute paths
-    # path_base = 'file:///home/paul/eastwood'
     used_chunks_paths = [path.replace('output','../static') for path in used_chunks_paths]
     # get the basename of each chunk path
     used_chunk_links = [f"[{os.path.basename(path)}]({path.replace(' ','%20')})" for path in used_chunks_paths]
@@ -291,9 +375,8 @@ example_history = [
 ]
 
 if __name__ == '__main__':
-    user_question = "What were the last reported sales for Pfizer's COVID vaccine?"
+    user_question = "Compare their SG&A expense from last year with Pfizer's"
+    # user_question = "and what are their main drugs?"
     print(f'answering question: {user_question}')
-    result = answer_question(user_question)
+    result = answer_question(user_question,history=example_history)
     print(result)
-
-
